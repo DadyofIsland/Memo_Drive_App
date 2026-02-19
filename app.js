@@ -122,7 +122,7 @@ if (SpeechRecognition) {
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
     recognition.lang = 'ja-JP';
-    recognition.interimResults = true;
+    recognition.interimResults = false; // Fix: Prevent duplication on Android
 
     recognition.onstart = () => {
         STATE.isListening = true;
