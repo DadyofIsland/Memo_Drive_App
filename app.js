@@ -1,16 +1,23 @@
-// app.js
+/**
+ * app.js
+ * メモアプリのメインプログラム（アプリケーションのロジック）
+ * ここでは画面の動きや、GAS経由でのスプレッドシートへの保存、音声認識の処理を行います。
+ */
 
-const STATE = {
-    isListening: false,
-    isOnline: navigator.onLine,
-    isAuthenticated: false,
-    tokenClient: null,
-    gapiInited: false,
-    gisInited: false,
+// -------------------------------------------------------------
+// 1. アプリの状態管理 (State Management)
+// -------------------------------------------------------------
+// アプリがいま「オンラインか」「録音中か」などの状態を記憶しておく場所です。
+const appState = {
+    isListening: false,     // マイクで音声を聞き取っているか
+    isOnline: navigator.onLine, // インターネットに繋がっているか
 };
 
-// DOM Elements
-const els = {
+// -------------------------------------------------------------
+// 2. 画面の部品（HTML要素）の取得 (DOM Elements)
+// -------------------------------------------------------------
+// プログラムから操作したい画面の部品をまとめて置いておきます。
+const domElements = {
     statusBar: document.getElementById('status-bar'),
     statusText: document.getElementById('status-text'),
     statusDot: document.querySelector('.status-dot'),
@@ -18,355 +25,263 @@ const els = {
     memoText: document.getElementById('memo-text'),
     micBtn: document.getElementById('mic-btn'),
     saveBtn: document.getElementById('save-btn'),
-    authContainer: document.getElementById('auth-container'),
 };
 
-// --- Initialization ---
+// -------------------------------------------------------------
+// 3. アプリの初期設定 (Initialization)
+// -------------------------------------------------------------
+// 画面が読み込まれた時に最初に実行される処理です。
+window.addEventListener('load', () => {
+    initializeDateDisplay();
+    updateOnlineStatusDisplay();
+    checkOfflineUnsavedMemos();
 
-window.onload = () => {
-    initDateDisplay();
-    checkOnlineStatus();
-    loadOfflineData();
-
-    // Initialize Google APIs
-    gapi.load('client', initGapi);
-
-    // Note: GIS (Google Identity Services) client initialization handled in initGis
-};
-
-function initDateDisplay() {
-    const now = new Date();
-    const options = { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' };
-    els.dateDisplay.textContent = now.toLocaleDateString('ja-JP', options);
-}
-
-// --- Google API & Auth ---
-
-async function initGapi() {
-    await gapi.client.init({
-        apiKey: window.APP_CONFIG.API_KEY,
-        discoveryDocs: [window.APP_CONFIG.DISCOVERY_DOC],
-    });
-    STATE.gapiInited = true;
-    maybeEnableAuth();
-}
-
-function initGis() {
-    STATE.tokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: window.APP_CONFIG.CLIENT_ID,
-        scope: window.APP_CONFIG.SCOPES,
-        callback: '', // defined at request time
-    });
-    STATE.gisInited = true;
-    maybeEnableAuth();
-}
-
-function maybeEnableAuth() {
-    if (STATE.gapiInited && STATE.gisInited) {
-        renderAuthButton();
+    // オンラインなら、仮保存されたメモを自動で送信する
+    if (appState.isOnline) {
+        syncOfflineMemosToSheet();
     }
+});
+
+// 現在の日付を画面に表示します
+function initializeDateDisplay() {
+    const today = new Date();
+    // 例: 2026年2月20日(金)
+    const formatOptions = { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' };
+    domElements.dateDisplay.textContent = today.toLocaleDateString('ja-JP', formatOptions);
 }
 
-// Manually verify initGis called (it's called by script load usually, but we need to ensure)
-// Actually, we need to call it manually after the script loads.
-// We'll trust the onload callback in HTML or just call it here if window.google exists.
-if (window.google) {
-    initGis();
-} else {
-    // If script loads later
-    // This is a simplification; in production, use better async loading
-    setTimeout(initGis, 1000);
-}
+// -------------------------------------------------------------
+// 4. 音声認識 (Voice Recognition)
+// -------------------------------------------------------------
 
-function renderAuthButton() {
-    // Simple check if we have a token stored (not perfect, but good for MVP)
-    const token = gapi.client.getToken();
-    if (token) {
-        STATE.isAuthenticated = true;
-        updateStatus('ONLINE (AUTHED)', 'online');
-    } else {
-        // Render a "Sign In" button
-        const btn = document.createElement('button');
-        btn.textContent = 'Googleでログイン';
-        btn.onclick = handleAuthClick;
-        btn.style.padding = '4px 8px';
-        btn.style.fontSize = '12px';
-        els.authContainer.innerHTML = '';
-        els.authContainer.appendChild(btn);
-    }
-}
+// ブラウザが音声認識に対応しているかチェックします
+const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-function handleAuthClick() {
-    STATE.tokenClient.callback = async (resp) => {
-        if (resp.error) {
-            throw (resp);
-        }
-        STATE.isAuthenticated = true;
-        els.authContainer.innerHTML = ''; // Remove button
-        updateStatus('ONLINE (AUTHED)', 'online');
-        await syncPendingData(); // Sync any offline data once authenticated
+if (SpeechRecognitionAPI) {
+    const voiceRecognizer = new SpeechRecognitionAPI();
+    voiceRecognizer.continuous = true; // 連続して聞き取る
+    voiceRecognizer.lang = 'ja-JP';    // 日本語を設定
+    voiceRecognizer.interimResults = false; // 確定した言葉だけを取得する
+
+    // 音声認識が「始まった時」の処理
+    voiceRecognizer.onstart = () => {
+        appState.isListening = true;
+        domElements.micBtn.classList.add('listening');
+        updateAppStatusMessage('音声を聞き取り中...', 'syncing');
     };
 
-    if (gapi.client.getToken() === null) {
-        STATE.tokenClient.requestAccessToken({ prompt: 'consent' });
-    } else {
-        STATE.tokenClient.requestAccessToken({ prompt: '' });
-    }
-}
+    // 音声認識が「終わった時」の処理
+    voiceRecognizer.onend = () => {
+        appState.isListening = false;
+        domElements.micBtn.classList.remove('listening');
 
-// --- Voice Recognition ---
-
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-
-if (SpeechRecognition) {
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.lang = 'ja-JP';
-    recognition.interimResults = false; // Fix: Prevent duplication on Android
-
-    recognition.onstart = () => {
-        STATE.isListening = true;
-        els.micBtn.classList.add('listening');
-        updateStatus('Listening...', 'syncing');
-    };
-
-    recognition.onend = () => {
-        STATE.isListening = false;
-        els.micBtn.classList.remove('listening');
-        if (STATE.isOnline) {
-            updateStatus('ONLINE', 'online');
+        if (appState.isOnline) {
+            updateAppStatusMessage('ONLINE', 'online');
         } else {
-            updateStatus('OFFLINE', 'offline');
+            updateAppStatusMessage('OFFLINE', 'offline');
         }
     };
 
-    recognition.onresult = (event) => {
-        let finalTranscript = '';
+    // 音声が「文字に変換された時」の処理
+    voiceRecognizer.onresult = (event) => {
+        let recognizedText = '';
 
-        // Simply append new results to existing text
-        // A more robust app would handle cursor position
-        const currentText = els.memoText.value;
-
+        // 新しく聞き取った言葉を繋げます
         for (let i = event.resultIndex; i < event.results.length; ++i) {
             if (event.results[i].isFinal) {
-                finalTranscript += event.results[i][0].transcript;
+                recognizedText += event.results[i][0].transcript;
             }
         }
 
-        if (finalTranscript) {
-            // Add a newline if there's text
-            const separator = els.memoText.value.length > 0 ? '\n' : '';
-            els.memoText.value += separator + finalTranscript;
-            els.saveBtn.disabled = false;
+        // テキストボックスに文字を入力します
+        if (recognizedText) {
+            // すでに文字が入っていたら、改行して追加します
+            const separator = domElements.memoText.value.length > 0 ? '\n' : '';
+            domElements.memoText.value += separator + recognizedText;
+            domElements.saveBtn.disabled = false; // 保存ボタンを押せるようにする
         }
     };
 
-    els.micBtn.onclick = () => {
-        if (STATE.isListening) {
-            recognition.stop();
+    // マイクボタンが押された時の処理
+    domElements.micBtn.onclick = () => {
+        if (appState.isListening) {
+            // 聞き取り中ならストップ
+            voiceRecognizer.stop();
         } else {
-            recognition.start();
+            // 止まっていればスタート
+            voiceRecognizer.start();
         }
     };
 } else {
-    console.log("Web Speech API not supported");
-    els.micBtn.style.display = 'none';
-    alert("このブラウザは音声入力をサポートしていません。Chromeを使用してください。");
+    // 音声認識に非対応のブラウザの場合
+    console.warn("このブラウザは音声入力APIをサポートしていません。");
+    domElements.micBtn.style.display = 'none';
+    alert("このブラウザは音声入力をサポートしていません。Chrome ブラウザを使用してください。");
 }
 
-// --- Text & Save Logic ---
+// -------------------------------------------------------------
+// 5. メモの入力と保存アクション (Text & Save Actions)
+// -------------------------------------------------------------
 
-els.memoText.addEventListener('input', () => {
-    els.saveBtn.disabled = els.memoText.value.trim().length === 0;
+// メモ欄に文字が入力された時に、保存ボタンを押せるかをチェックします
+domElements.memoText.addEventListener('input', () => {
+    const textContent = domElements.memoText.value.trim();
+    // 文字が空っぽなら保存ボタンを無効にする
+    domElements.saveBtn.disabled = textContent.length === 0;
 });
 
-els.saveBtn.onclick = async () => {
-    const text = els.memoText.value.trim();
-    if (!text) return;
+// 保存ボタンが押された時の処理
+domElements.saveBtn.onclick = async () => {
+    const textToSave = domElements.memoText.value.trim();
+    if (!textToSave) return;
 
-    updateStatus('Saving...', 'syncing');
-    els.saveBtn.disabled = true;
+    updateAppStatusMessage('保存中...', 'syncing');
+    domElements.saveBtn.disabled = true;
 
-    if (STATE.isOnline && STATE.isAuthenticated) {
+    // オンラインならGAS経由でスプレッドシートに保存
+    if (appState.isOnline) {
         try {
-            await saveToDrive(text);
-            els.memoText.value = ''; // Clear after save
-            updateStatus('Saved!', 'online');
-            setTimeout(() => updateStatus('ONLINE', 'online'), 2000);
-        } catch (err) {
-            console.error('Save failed', err);
-            // Fallback to local
-            saveToLocal(text);
-            const errMsg = err.result?.error?.message || err.message || JSON.stringify(err);
-            alert(`保存に失敗しました: ${errMsg}`);
-            updateStatus('Saved Locally (Sync later)', 'offline');
+            await sendMemoToSheet(textToSave);
+            domElements.memoText.value = ''; // 保存できたら入力欄を空にする
+            updateAppStatusMessage('保存しました！', 'online');
+
+            // 2秒後にステータスを元に戻す
+            setTimeout(() => updateAppStatusMessage('ONLINE', 'online'), 2000);
+        } catch (error) {
+            console.error('スプレッドシートへの保存に失敗しました', error);
+            handleSaveFailure(textToSave, error);
         }
     } else {
-        saveToLocal(text);
-        els.memoText.value = '';
-        updateStatus('Saved Locally', 'offline');
-        setTimeout(() => updateStatus('OFFLINE', 'offline'), 2000);
+        // オフラインの時は、ブラウザ内（手元）に保存しておく
+        saveTextLocally(textToSave);
+        domElements.memoText.value = '';
+        updateAppStatusMessage('端末内に仮保存しました', 'offline');
+
+        setTimeout(() => updateAppStatusMessage('OFFLINE', 'offline'), 2000);
     }
 };
 
-// --- Drive API Logic ---
+// 保存が失敗したときの処理
+function handleSaveFailure(text, error) {
+    saveTextLocally(text); // ひとまず端末に仮保存する
 
-async function saveToDrive(content) {
-    const fileName = getFileName();
-    const folderId = window.APP_CONFIG.FOLDER_ID;
+    const errorMessage = error.message || JSON.stringify(error);
+    alert(`保存に失敗しました（端末内に仮保存しました）: ${errorMessage}`);
 
-    // 1. Search for existing file
-    const query = `name = '${fileName}' and '${folderId}' in parents and trashed = false`;
-    let fileId = null;
-    let currentContent = '';
-
-    try {
-        const listResp = await gapi.client.drive.files.list({
-            q: query,
-            fields: 'files(id, name)',
-            spaces: 'drive',
-        });
-
-        if (listResp.result.files.length > 0) {
-            fileId = listResp.result.files[0].id;
-            // Download current content to append
-            const fileResp = await gapi.client.drive.files.get({
-                fileId: fileId,
-                alt: 'media',
-            });
-            currentContent = fileResp.body;
-        }
-    } catch (err) {
-        console.error("Search failed", err);
-        throw err;
-    }
-
-    // 2. Prepare new content (Append with timestamp)
-    const time = new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
-    const newEntry = `\n## ${time}\n${content}\n`;
-    const finalContent = (currentContent + newEntry).trim();
-
-    if (fileId) {
-        // Update (PATCH)
-        // parents field cannot be set directly on update unless using addParents/removeParents
-        const updateMetadata = {
-            name: fileName,
-            mimeType: 'text/markdown',
-        };
-
-        const multipartRequestBody =
-            `--foo_bar_baz\nContent-Type: application/json; charset=UTF-8\n\n` +
-            JSON.stringify(updateMetadata) +
-            `\n--foo_bar_baz\nContent-Type: text/markdown\n\n` +
-            finalContent +
-            `\n--foo_bar_baz--`;
-
-        await gapi.client.request({
-            path: `/upload/drive/v3/files/${fileId}`,
-            method: 'PATCH',
-            params: { uploadType: 'multipart' },
-            headers: { 'Content-Type': 'multipart/related; boundary=foo_bar_baz' },
-            body: multipartRequestBody,
-        });
-    } else {
-        // Create (POST)
-        const createMetadata = {
-            name: fileName,
-            mimeType: 'text/markdown',
-            parents: [folderId],
-        };
-
-        const multipartRequestBody =
-            `--foo_bar_baz\nContent-Type: application/json; charset=UTF-8\n\n` +
-            JSON.stringify(createMetadata) +
-            `\n--foo_bar_baz\nContent-Type: text/markdown\n\n` +
-            finalContent +
-            `\n--foo_bar_baz--`;
-
-        await gapi.client.request({
-            path: '/upload/drive/v3/files',
-            method: 'POST',
-            params: { uploadType: 'multipart' },
-            headers: { 'Content-Type': 'multipart/related; boundary=foo_bar_baz' },
-            body: multipartRequestBody,
-        });
-    }
+    updateAppStatusMessage('端末内に仮保存済（後で同期します）', 'offline');
 }
 
-function getFileName() {
-    // Format: YYYY-MM-DD.md
+// -------------------------------------------------------------
+// 6. GAS経由でスプレッドシートへの保存処理 (GAS POST Logic)
+// -------------------------------------------------------------
+
+// GASのウェブアプリにメモを送信する関数です
+async function sendMemoToSheet(content) {
+    const gasUrl = window.APP_CONFIG.GAS_URL;
     const now = new Date();
-    const y = now.getFullYear();
-    const m = String(now.getMonth() + 1).padStart(2, '0');
-    const d = String(now.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}.md`;
+
+    // 日時のフォーマット（例: 2026-02-20 22:54）
+    const timestamp = now.toLocaleString('ja-JP', {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit',
+    });
+
+    // GASのウェブアプリに、メモの内容と日時をまとめて送ります
+    const response = await fetch(gasUrl, {
+        method: 'POST',
+        mode: 'no-cors', // GASへの通信にはこの設定が必要です
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            text: content,
+            timestamp: timestamp,
+        }),
+    });
+
+    // no-cors モードではレスポンスの中身を読めませんが、
+    // 通信自体が成功すれば保存は完了しています。
+    // ネットワークエラー時は fetch が例外を投げるため catch で捕まります。
 }
 
-// --- Offline & Sync Logic ---
+// -------------------------------------------------------------
+// 7. オフライン（インターネット切断）時の処理 (Offline & Sync Logic)
+// -------------------------------------------------------------
 
+// インターネットに「繋がった」時のイベント
 window.addEventListener('online', () => {
-    STATE.isOnline = true;
-    updateStatus('ONLINE', 'online');
-    syncPendingData();
+    appState.isOnline = true;
+    updateAppStatusMessage('ONLINE', 'online');
+    syncOfflineMemosToSheet(); // 繋がったらすぐに、溜まっていたメモを同期する
 });
 
+// インターネットが「切れた」時のイベント
 window.addEventListener('offline', () => {
-    STATE.isOnline = false;
-    updateStatus('OFFLINE', 'offline');
+    appState.isOnline = false;
+    updateAppStatusMessage('OFFLINE', 'offline');
 });
 
-function checkOnlineStatus() {
+// 今現在、インターネットに繋がっているかを画面に表示します
+function updateOnlineStatusDisplay() {
     if (navigator.onLine) {
-        updateStatus('ONLINE', 'online');
+        updateAppStatusMessage('ONLINE', 'online');
     } else {
-        updateStatus('OFFLINE', 'offline');
+        updateAppStatusMessage('OFFLINE', 'offline');
     }
 }
 
-function updateStatus(text, type) {
-    els.statusText.textContent = text;
-    els.statusDot.className = 'status-dot ' + type;
+// 画面左上のステータス表示（文字と色付きの点）を更新します
+function updateAppStatusMessage(text, dotType) {
+    domElements.statusText.textContent = text;
+    domElements.statusDot.className = `status-dot ${dotType}`;
 }
 
-function saveToLocal(text) {
-    const pending = JSON.parse(localStorage.getItem('pending_memos') || '[]');
-    pending.push({
+// 手元の端末（ブラウザの中）にメモを仮保存しておきます
+function saveTextLocally(text) {
+    // 過去に保存したものを取り出す（なければ空のリストを用意）
+    const pendingMemos = JSON.parse(localStorage.getItem('pending_memos') || '[]');
+
+    // 新しいメモと、保存した時間を追加する
+    pendingMemos.push({
         text: text,
         timestamp: new Date().toISOString(),
     });
-    localStorage.setItem('pending_memos', JSON.stringify(pending));
+
+    // 端末の記憶箱に保存し直す
+    localStorage.setItem('pending_memos', JSON.stringify(pendingMemos));
 }
 
-function loadOfflineData() {
-    // Just checks if there is any, maybe indicator later
-    const pending = JSON.parse(localStorage.getItem('pending_memos') || '[]');
-    if (pending.length > 0) {
-        console.log(`${pending.length} unsaved memos found.`);
+// オフラインの時に保存されたメモが残っていないか起動時に確認します
+function checkOfflineUnsavedMemos() {
+    const pendingMemos = JSON.parse(localStorage.getItem('pending_memos') || '[]');
+    if (pendingMemos.length > 0) {
+        console.log(`未送信のメモが ${pendingMemos.length} 件あります。接続時に送信されます。`);
     }
 }
 
-async function syncPendingData() {
-    if (!STATE.isAuthenticated || !STATE.isOnline) return;
+// 端末に仮保存されているメモを、まとめてスプレッドシートに送り出します（同期処理）
+async function syncOfflineMemosToSheet() {
+    if (!appState.isOnline) return;
 
-    const pending = JSON.parse(localStorage.getItem('pending_memos') || '[]');
-    if (pending.length === 0) return;
+    const pendingMemos = JSON.parse(localStorage.getItem('pending_memos') || '[]');
+    if (pendingMemos.length === 0) return; // 送るものがなければ終了
 
-    updateStatus('Syncing...', 'syncing');
-
-    // Try to save one large chunk or individually
-    // Let's combine them for efficiency
-    let combinedText = '';
-    pending.forEach(item => {
-        combinedText += `\n(Synced from offline)\n${item.text}\n`;
-    });
+    updateAppStatusMessage('同期中...', 'syncing');
 
     try {
-        await saveToDrive(combinedText);
-        localStorage.removeItem('pending_memos'); // Clear after success
-        updateStatus('Synced!', 'online');
-        setTimeout(() => updateStatus('ONLINE', 'online'), 2000);
-    } catch (err) {
-        console.error('Sync failed', err);
-        updateStatus('Sync Failed', 'offline'); // Keep offline status so we try again
+        // 仮保存していた各メモを1件ずつ順番にスプレッドシートへ送ります
+        for (const memo of pendingMemos) {
+            await sendMemoToSheet(`(オフライン時の仮保存) ${memo.text}`);
+        }
+
+        // 同期に成功したら、手元の記憶箱は空っぽにする
+        localStorage.removeItem('pending_memos');
+
+        updateAppStatusMessage('同期完了！', 'online');
+        setTimeout(() => updateAppStatusMessage('ONLINE', 'online'), 2000);
+    } catch (error) {
+        console.error('同期（一括送信）に失敗しました', error);
+        // 失敗した場合は未送信のままにしておくため、次に再び試します
+        updateAppStatusMessage('同期失敗（後で再試行します）', 'offline');
     }
 }

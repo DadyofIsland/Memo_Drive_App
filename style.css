@@ -1,13 +1,21 @@
+/* -----------------------------------------------------------------
+ * 全体の色設定（変数）
+ * ここで色を決めておくと、あとで変更するのがとても簡単になります。
+ * ----------------------------------------------------------------- */
 :root {
-  --bg-color: #121212;
-  --surface-color: #1e1e1e;
-  --primary-color: #bb86fc;
-  --text-color: #e0e0e0;
-  --secondary-text: #a0a0a0;
-  --active-color: #03dac6;
-  --error-color: #cf6679;
+  --bg-color: #121212;             /* 背景色（黒系） */
+  --surface-color: #1e1e1e;         /* 枠の中の背景色（少し明るい黒） */
+  --primary-color: #bb86fc;         /* メインのアクセントカラー（紫） */
+  --text-color: #e0e0e0;            /* 基本の文字色（白系） */
+  --secondary-text: #a0a0a0;        /* 補助的な文字色（グレー） */
+  --active-color: #03dac6;          /* オンラインなどの色（青緑系） */
+  --error-color: #cf6679;           /* オフライン・エラーの色（赤系） */
 }
 
+/* -----------------------------------------------------------------
+ * 基本の共通設定
+ * ----------------------------------------------------------------- */
+/* 全ての要素に対して、余白などをリセットします */
 * {
   box-sizing: border-box;
   margin: 0;
@@ -15,25 +23,30 @@
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 
+/* 画面全体の土台設定 */
 body {
   background-color: var(--bg-color);
   color: var(--text-color);
-  height: 100vh;
+  height: 100vh;           /* 画面の高さを100%にする */
   display: flex;
   flex-direction: column;
-  overflow: hidden; /* Prevent pull-to-refresh on mobile */
+  overflow: hidden;        /* スマホで下に引っ張って更新されるのを防ぐ */
 }
 
+/* スマホ表示向けのアプリの枠 */
 .app-container {
   flex: 1;
   display: flex;
   flex-direction: column;
   padding: 16px;
-  max-width: 600px;
-  margin: 0 auto;
+  max-width: 600px;        /* パソコンで見ても幅が広がりすぎないように制限 */
+  margin: 0 auto;          /* 画面の中央に配置 */
   width: 100%;
 }
 
+/* -----------------------------------------------------------------
+ * ヘッダー部分（画面上部のステータスなど）
+ * ----------------------------------------------------------------- */
 header {
   display: flex;
   justify-content: space-between;
@@ -42,6 +55,7 @@ header {
   height: 40px;
 }
 
+/* オンライン・オフラインの表示枠 */
 .status-bar {
   display: flex;
   align-items: center;
@@ -52,6 +66,7 @@ header {
   border-radius: 12px;
 }
 
+/* オンライン・オフラインを示すランプ（丸） */
 .status-dot {
   width: 8px;
   height: 8px;
@@ -60,10 +75,23 @@ header {
   margin-right: 8px;
 }
 
-.status-dot.online { background-color: var(--active-color); box-shadow: 0 0 5px var(--active-color); }
-.status-dot.offline { background-color: var(--error-color); }
-.status-dot.syncing { background-color: var(--primary-color); animation: pulse 1s infinite; }
+/* ランプの状態ごとの色分け */
+.status-dot.online { 
+  background-color: var(--active-color); 
+  box-shadow: 0 0 5px var(--active-color); /* 少し光らせる */
+}
+.status-dot.offline { 
+  background-color: var(--error-color); 
+}
+.status-dot.syncing { 
+  background-color: var(--primary-color); 
+  animation: pulse 1s infinite; /* 点滅アニメーション */
+}
 
+/* -----------------------------------------------------------------
+ * メインコンテンツ部分
+ * ----------------------------------------------------------------- */
+/* 日付の文字の大きさ */
 .date-display {
   font-size: 24px;
   font-weight: bold;
@@ -71,15 +99,17 @@ header {
   text-align: center;
 }
 
+/* メモ入力エリアの枠 */
 .input-area {
-  flex: 1;
+  flex: 1; /* 余ったスペースを全部使う */
   background-color: var(--surface-color);
   border-radius: 16px;
   padding: 16px;
   margin-bottom: 24px;
-  box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+  box-shadow: 0 4px 6px rgba(0,0,0,0.3); /* 少し浮かせる影 */
 }
 
+/* メモを書くテキストボックス */
 textarea {
   width: 100%;
   height: 100%;
@@ -88,10 +118,13 @@ textarea {
   color: var(--text-color);
   font-size: 18px;
   line-height: 1.5;
-  resize: none;
-  outline: none;
+  resize: none; /* サイズ変更できなくする */
+  outline: none; /* 選択時の青い枠線を消す */
 }
 
+/* -----------------------------------------------------------------
+ * 録音・保存ボタン部分
+ * ----------------------------------------------------------------- */
 .controls {
   display: flex;
   flex-direction: column;
@@ -100,6 +133,7 @@ textarea {
   margin-bottom: 20px;
 }
 
+/* マイクボタン（録音用） */
 .mic-btn {
   width: 80px;
   height: 80px;
@@ -111,18 +145,20 @@ textarea {
   justify-content: center;
   align-items: center;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.2s ease; /* ふんわり変化させる */
   box-shadow: 0 4px 12px rgba(187, 134, 252, 0.2);
 }
 
+/* マイクボタン（録音中）の特別なデザイン */
 .mic-btn.listening {
   background-color: var(--primary-color);
   color: var(--bg-color);
-  transform: scale(1.1);
+  transform: scale(1.1); /* 少し大きくする */
   box-shadow: 0 0 20px rgba(187, 134, 252, 0.6);
-  animation: breathe 1.5s infinite ease-in-out;
+  animation: breathe 1.5s infinite ease-in-out; /* 呼吸するようなアニメーション */
 }
 
+/* 保存ボタン */
 .save-btn {
   width: 100%;
   padding: 16px;
@@ -133,31 +169,35 @@ textarea {
   font-weight: bold;
   font-size: 16px;
   cursor: pointer;
-  opacity: 0.5;
-  pointer-events: none;
+  opacity: 0.5;         /* 最初は半透明にしておく */
+  pointer-events: none; /* 押せないようにする */
   transition: opacity 0.2s;
 }
 
+/* 文字が入力されて、押せる状態の保存ボタン */
 .save-btn:not([disabled]) {
-  opacity: 1;
-  pointer-events: auto;
+  opacity: 1;           /* はっきり表示する */
+  pointer-events: auto; /* 押せるようにする */
 }
 
-/* Animations */
+/* -----------------------------------------------------------------
+ * アニメーションの設定
+ * ----------------------------------------------------------------- */
+/* 状態ランプの点滅アニメーション */
 @keyframes pulse {
   0% { opacity: 1; }
   50% { opacity: 0.5; }
   100% { opacity: 1; }
 }
 
+/* マイク録音中の呼吸するようなアニメーション */
 @keyframes breathe {
   0% { box-shadow: 0 0 20px rgba(187, 134, 252, 0.6); }
   50% { box-shadow: 0 0 40px rgba(187, 134, 252, 0.8); }
   100% { box-shadow: 0 0 20px rgba(187, 134, 252, 0.6); }
 }
 
-/* Utility to hide Google Auth button when signed in if needed, 
-   though usually we want it accessible */
+/* Googleログインボタンを自動で右端に寄せるための調整 */
 .g_id_signin {
   margin-left: auto;
 }
